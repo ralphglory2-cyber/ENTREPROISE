@@ -52,13 +52,7 @@ const Header: React.FC<HeaderProps> = ({ onAdminClick }) => {
                 </span>
               )}
             </button>
-            <button
-              onClick={onAdminClick}
-              className="p-2 text-gray-600 hover:text-black transition-colors duration-200"
-              aria-label="Administration"
-            >
-              <User size={24} />
-            </button>
+            {/* Admin access hidden - only accessible via direct URL */}
           </div>
         </div>
       </div>

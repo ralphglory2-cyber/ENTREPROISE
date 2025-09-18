@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Lock } from 'lucide-react';
+import { Lock, Eye, EyeOff } from 'lucide-react';
 
 interface AdminLoginProps {
   onLogin: (password: string) => boolean;
@@ -9,14 +9,17 @@ interface AdminLoginProps {
 
 const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onClose }) => {
   const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [error, setError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const isValid = onLogin(password);
+    const isValid = onLogin(username + ':' + password);
     if (!isValid) {
-      setError('Mot de passe incorrect');
+      setError('Identifiants incorrects');
       setPassword('');
+      setUsername('');
     }
   };
 
@@ -36,34 +39,64 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, onClose }) => {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Mot de passe
+              Nom d'utilisateur
             </label>
             <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+              placeholder="admin"
               required
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Mot de passe
+            </label>
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                placeholder="••••••••"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
             {error && <p className="text-red-500 text-sm mt-1">{error}</p>}
           </div>
 
           <div className="flex space-x-3">
             <button
               type="submit"
-              className="flex-1 bg-black text-white py-2 px-4 rounded-md hover:bg-gray-800 transition-colors"
+              className="flex-1 bg-black text-white py-3 px-6 rounded-lg hover:bg-white hover:text-black hover:border-2 hover:border-black transition-all duration-300 font-semibold"
             >
               Se connecter
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-400 transition-colors"
+              className="flex-1 bg-gray-200 text-gray-700 py-3 px-6 rounded-lg hover:bg-gray-300 transition-all duration-300 font-semibold"
             >
               Annuler
             </button>
           </div>
         </form>
+        
+        <div className="mt-6 text-center">
+          <p className="text-xs text-gray-500">
+            Accès réservé aux administrateurs autorisés
+          </p>
+        </div>
       </motion.div>
     </div>
   );

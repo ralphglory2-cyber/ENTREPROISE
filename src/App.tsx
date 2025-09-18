@@ -16,9 +16,10 @@ function App() {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
 
-  const handleAdminLogin = (password: string) => {
-    // Simple password check - in production, this should be more secure
-    if (password === 'admin2025') {
+  const handleAdminLogin = (credentials: string) => {
+    // Simple credentials check - in production, this should be more secure
+    const [username, password] = credentials.split(':');
+    if (username === 'admin' && password === 'ReenweezAdmin2025!') {
       setIsAdminAuthenticated(true);
       setShowAdminLogin(false);
       return true;
@@ -27,17 +28,8 @@ function App() {
   };
 
   const handleAdminClick = () => {
-    if (isAdminAuthenticated) {
-      // If already authenticated, redirect to admin dashboard
-      window.location.href = '/admin';
-    } else {
-      setShowAdminLogin(true);
-    }
+    setShowAdminLogin(true);
   };
-
-  if (isAdminAuthenticated && window.location.pathname === '/admin') {
-    return <AdminDashboard />;
-  }
 
   return (
     <Router>
@@ -51,9 +43,23 @@ function App() {
           <Route path="/contact" element={<ContactPage />} />
           <Route path="/shipping" element={<ShippingPage />} />
           <Route path="/terms" element={<TermsPage />} />
-          <Route path="/admin" element={<AdminDashboard />} />
+          <Route 
+            path="/admin" 
+            element={
+              isAdminAuthenticated ? (
+                <AdminDashboard />
+              ) : (
+                <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+                  <AdminLogin
+                    onLogin={handleAdminLogin}
+                    onClose={() => window.location.href = '/'}
+                  />
+                </div>
+              )
+            } 
+          />
         </Routes>
-        <Footer />
+        {window.location.pathname !== '/admin' && <Footer />}
         
         {showAdminLogin && (
           <AdminLogin
