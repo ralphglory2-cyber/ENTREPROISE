@@ -1,4 +1,3 @@
-```yaml
 name: CI — Admin API smoke tests
 
 on:
@@ -28,13 +27,13 @@ jobs:
 
     env:
       # DB locale exposée par le service postgres
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/entreprise?schema=public
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/entreprise?schema=public'
       # Secrets du dépôt
       SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
       ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
       # Mot de passe en clair correspondant au hash ci-dessus
-      ADMIN_PASSWORD_PLAIN: ReenweezAdmin2025!
+      ADMIN_PASSWORD_PLAIN: 'ReenweezAdmin2025!'
 
     steps:
       - name: Checkout
@@ -43,24 +42,21 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
           cache: npm
 
-      # jq n'est pas garanti sur tous les runners
       - name: Ensure jq is installed
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
       - name: Install dependencies (ci with fallback)
         shell: bash
         run: |
           set -e
-          echo "PWD: $(pwd)"
-          ls -la
           if [ -f package-lock.json ]; then
-            echo "Using npm ci"
             npm ci --no-audit --no-fund || npm install --no-audit --no-fund
           else
-            echo "No package-lock.json -> npm install"
             npm install --no-audit --no-fund
           fi
 
@@ -123,4 +119,3 @@ jobs:
         run: |
           echo "===== API LOGS ====="
           cat api.log || true
-```
