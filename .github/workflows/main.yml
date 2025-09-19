@@ -1,0 +1,107 @@
+name: CI — Admin API smoke tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: entreproise
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # DB locale exposée par le service postgres
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/entreproise?schema=public
+      # Secrets du dépôt (déjà ajoutés)
+      SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      ADMIN_EMAIL:     ${{ secrets.ADMIN_EMAIL }}
+      ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
+      # Mot de passe en clair pour le login de test.
+      # ⚠️ Choisis le même mot de passe que celui utilisé pour générer ADMIN_PASSWORD_HASH.
+      ADMIN_PASSWORD_PLAIN: ReenweezAdmin2025!
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Prepare DB (migrate or push)
+        run: |
+          npx prisma migrate deploy || npx prisma db push
+
+      - name: Seed DB
+        run: npx prisma db seed
+
+      - name: Start API (background) and wait for /api/health
+        shell: bash
+        run: |
+          set -e
+          # Démarre l'API (essaie server/index.ts, sinon server/app.ts, sinon script npm)
+          if [ -f server/index.ts ]; then
+            npx ts-node server/index.ts > api.log 2>&1 &
+          elif [ -f server/app.ts ]; then
+            npx ts-node server/app.ts > api.log 2>&1 &
+          else
+            npm run dev:server > api.log 2>&1 &
+          fi
+          # Attente de l'API
+          for i in {1..60}; do
+            if curl -fsS http://localhost:3001/api/health >/dev/null; then
+              echo "API up"; break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3001/api/health
+
+      - name: Get CSRF token
+        run: |
+          curl -fsS -c cookies.txt http://localhost:3001/api/csrf -o csrf.json
+          echo "CSRF=$(jq -r '.csrfToken' csrf.json)" >> $GITHUB_ENV
+
+      - name: Login as admin
+        run: |
+          curl -fsS -b cookies.txt -c cookies.txt \
+            -H "Content-Type: application/json" \
+            -H "X-CSRF-Token: $CSRF" \
+            -X POST http://localhost:3001/api/auth/login \
+            -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD_PLAIN\"}" \
+            -o login.json
+          cat login.json
+
+      - name: Dashboard summary should return 200
+        run: |
+          curl -fsS -b cookies.txt http://localhost:3001/api/admin/dashboard/summary -o summary.json
+          jq type summary.json
+
+      - name: Print API logs on failure
+        if: failure()
+        run: |
+          echo "===== API LOGS ====="
+          cat api.log || true
