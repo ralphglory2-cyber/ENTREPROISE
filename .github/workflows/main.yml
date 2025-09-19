@@ -1,4 +1,4 @@
-      - name: Detect & print repo layout (for debugging)
+name: Detect & print repo layout (for debugging)
         shell: bash
         run: |
           echo "=== tree (top-level) ==="
