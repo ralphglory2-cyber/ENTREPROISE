@@ -1,4 +1,4 @@
-      - name: Start API (background)
+ name: Start API (background)
         shell: bash
         run: |
           set -e
