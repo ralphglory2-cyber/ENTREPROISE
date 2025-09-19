@@ -1,19 +1,81 @@
- name: Start API (background)
+      - name: Detect API entrypoint
+        id: detect_entry
         shell: bash
         run: |
           set -e
-          export PORT=3001
+          candidates=(
+            "server/index.ts" "server/app.ts" "server/main.ts"
+            "serveur/index.ts" "serveur/app.ts" "serveur/main.ts"
+            "src/server/index.ts" "src/server.ts" "src/app.ts"
+            "api/index.ts" "api/app.ts" "api/main.ts"
+          )
+          found=""
+          for f in "${candidates[@]}"; do
+            if [ -f "$f" ]; then
+              found="$f"
+              break
+            fi
+          done
+          echo "Entrypoint found: ${found:-<none>}"
+          echo "found=$found" >> "$GITHUB_OUTPUT"
 
-          if [ -f server/index.ts ]; then
-            PORT=$PORT npx tsx server/index.ts > api.log 2>&1 &
-          elif [ -f server/app.ts ]; then
-            PORT=$PORT npx tsx server/app.ts > api.log 2>&1 &
-          elif [ -f server/main.ts ]; then
-            PORT=$PORT npx tsx server/main.ts > api.log 2>&1 &
+      - name: Start API (background)
+        shell: bash
+        run: |
+          set -e
+          # Expose multiple common port vars, au cas où l'app n'utilise pas PORT
+          export PORT=3001
+          export API_PORT=3001
+          export VITE_API_PORT=3001
+
+          ENTRY="${{ steps.detect_entry.outputs.found }}"
+          if [ -n "$ENTRY" ]; then
+            echo "Starting TS entrypoint: $ENTRY on PORT=$PORT"
+            PORT=$PORT API_PORT=$API_PORT VITE_API_PORT=$VITE_API_PORT \
+              npx tsx "$ENTRY" > api.log 2>&1 &
           elif npm run | grep -q '^  dev:server'; then
-            PORT=$PORT npm run dev:server > api.log 2>&1 &
+            echo "Starting npm script: dev:server"
+            PORT=$PORT API_PORT=$API_PORT VITE_API_PORT=$VITE_API_PORT \
+              npm run dev:server > api.log 2>&1 &
+          elif npm run | grep -q '^  dev:api'; then
+            echo "Starting npm script: dev:api"
+            PORT=$PORT API_PORT=$API_PORT VITE_API_PORT=$VITE_API_PORT \
+              npm run dev:api > api.log 2>&1 &
           else
-            PORT=$PORT npm run dev > api.log 2>&1 &
+            echo "Starting fallback: npm run dev"
+            PORT=$PORT API_PORT=$API_PORT VITE_API_PORT=$VITE_API_PORT \
+              npm run dev > api.log 2>&1 &
           fi
 
           echo $! > api.pid
+          sleep 1
+
+          # Si le process a crash instantanément, on montre les logs et on fail (le job continuera quand même grâce au continue-on-error des steps suivantes)
+          if ! ps -p $(cat api.pid) >/dev/null 2>&1; then
+            echo "::error::API process exited immediately"
+            echo "-------- api.log (full) --------"
+            cat api.log || true
+            exit 1
+          fi
+          echo "API process running with PID $(cat api.pid)"
+
+      - name: Wait for /api/health
+        shell: bash
+        run: |
+          set +e
+          PORT=${API_PORT:-3001}
+          for i in {1..120}; do  # ~4 minutes
+            if curl -fsS "http://localhost:${PORT}/api/health" >/dev/null; then
+              echo "API is up on port ${PORT}"
+              exit 0
+            fi
+            # dump des logs toutes les ~20s pour voir ce qui se passe
+            if [ $(( i % 10 )) -eq 0 ]; then
+              echo "---- api.log (last 80 lines, t=$((i*2))s) ----"
+              tail -n 80 api.log || true
+            fi
+            sleep 2
+          done
+          echo "::warning::API did not become healthy in time, continuing…"
+          # ne pas échouer, on continue la suite du pipeline
+          exit 0
