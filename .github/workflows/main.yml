@@ -1,4 +1,4 @@
-name: "CI - Admin API smoke tests"
+name: CI — Admin API smoke tests (strict)
 
 on:
   push:
@@ -10,6 +10,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
+    # ⚙️ Réglages faciles à adapter
+    env:
+      API_PORT: "3001"
+      HEALTH_PATH: "/api/health"
+      CSRF_PATH: "/api/csrf"
+
+      # DB locale exposée par le service postgres
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/entreprise?schema=public
+
+      # Secrets du dépôt requis (paramètres > Secrets and variables > Actions)
+      SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
+
+      # ⚠️ Doit correspondre au hash ci-dessus
+      ADMIN_PASSWORD_PLAIN: ReenweezAdmin2025!
+
     services:
       postgres:
         image: postgres:16
@@ -18,136 +35,137 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
-          - "5432:5432"
+          - 5432:5432
         options: >-
           --health-cmd="pg_isready -U postgres"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
 
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/entreprise?schema=public
-      SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
-      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
-      ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
-      ADMIN_PASSWORD_PLAIN: ReenweezAdmin2025!
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      - name: Install jq (if missing)
+      - name: Ensure jq is installed
         run: |
           if ! command -v jq >/dev/null; then
-            sudo apt-get update -y && sudo apt-get install -y jq
+            sudo apt-get update -y
+            sudo apt-get install -y jq
           fi
 
-      - name: Install dependencies (with retry)
+      - name: Install dependencies (retry once)
         shell: bash
         run: |
           set -e
           npm config set fund false
           npm config set audit false
-          for i in 1 2 3; do
-            npm ci --prefer-offline --no-audit --no-fund && exit 0 || true
-            echo "Retry $i…"; sleep 5
-          done
-          npm install --prefer-offline --no-audit --no-fund
+          npm ci || (sleep 5 && npm ci)
 
       - name: Prisma generate
         run: npx prisma generate
 
-      - name: Prepare DB (deploy/push)
-        run: |
-          if [ -d prisma/migrations ] && [ "$(ls -A prisma/migrations)" ]; then
-            npx prisma migrate deploy || echo "::warning::migrate deploy failed"
-          fi
-          npx prisma db push --accept-data-loss || true
-
-      - name: Seed DB
-        run: |
-          npx tsx prisma/seed.ts || echo "::warning::seed failed, ignoring"
-
-      - name: Detect API entry
-        id: detect
+      - name: Prepare DB (migrate + push)
         shell: bash
         run: |
           set -e
-          for f in server/index.ts server/app.ts server/main.ts serveur/index.ts \
-                   src/server/index.ts src/server.ts src/app.ts src/main.ts \
-                   api/index.ts api/app.ts api/main.ts; do
-            [ -f "$f" ] && { echo "ts=$f" >> "$GITHUB_OUTPUT"; exit 0; }
-          done
-          for f in dist/server/index.js dist/server.js dist/app.js dist/main.js \
-                   build/server/index.js build/server.js build/app.js build/main.js; do
-            [ -f "$f" ] && { echo "js=$f" >> "$GITHUB_OUTPUT"; exit 0; }
-          done
-          echo "npm=1" >> "$GITHUB_OUTPUT"
+          if [ -d prisma/migrations ] && [ "$(ls -A prisma/migrations)" ]; then
+            npx prisma migrate deploy
+          fi
+          # Toujours s'assurer que le schéma est poussé
+          npx prisma db push
+
+      - name: Seed DB (tsx)
+        run: npx tsx prisma/seed.ts
 
       - name: Start API (background)
         shell: bash
         run: |
-          set -e
-          export PORT=3001
-          if [ -n "${{ steps.detect.outputs.ts }}" ]; then
-            npx tsx "${{ steps.detect.outputs.ts }}" > api.log 2>&1 & echo $! > api.pid
-          elif [ -n "${{ steps.detect.outputs.js }}" ]; then
-            node "${{ steps.detect.outputs.js }}" > api.log 2>&1 & echo $! > api.pid
+          set -euo pipefail
+          export PORT="${API_PORT}"
+          # Choisis l’entrypoint serveur
+          if   [ -f server/index.ts ]; then ENTRY="server/index.ts"
+          elif [ -f server/app.ts   ]; then ENTRY="server/app.ts"
+          elif [ -f server/main.ts  ]; then ENTRY="server/main.ts"
           else
-            npm run dev:server > api.log 2>&1 & echo $! > api.pid || \
-            (npm run dev > api.log 2>&1 & echo $! > api.pid)
+            # Dernier recours: un script npm
+            if npm run | grep -q '^  dev:server'; then
+              npm run dev:server > api.log 2>&1 & echo $! > api.pid; exit 0
+            fi
+            npm run dev > api.log 2>&1 & echo $! > api.pid; exit 0
           fi
+          npx tsx "$ENTRY" > api.log 2>&1 & echo $! > api.pid
 
-      - name: Wait for /api/health
+      - name: Wait for API health
         shell: bash
         run: |
-          set +e
-          for i in {1..90}; do
-            for p in 3001 3000 5173 8080 5000; do
-              for path in /api/health /health /healthz /status; do
-                curl -fsS "http://localhost:$p$path" >/dev/null && exit 0
-              done
-            done
-            [ $((i % 10)) -eq 0 ] && { echo "---- last 120 lines ----"; tail -n 120 api.log || true; }
+          set -e
+          URL="http://localhost:${API_PORT}${HEALTH_PATH}"
+          echo "Waiting for $URL ..."
+          for i in {1..120}; do
+            if curl -fsS "$URL" >/dev/null; then
+              echo "API is healthy ✅"
+              exit 0
+            fi
             sleep 2
           done
-          echo "::warning::API did not become healthy in time, continuing…"
+          echo "API did not become healthy in time ❌"
+          echo "===== API LOGS (tail) ====="
+          tail -n 200 api.log || true
+          exit 1
 
       - name: Get CSRF token
+        shell: bash
         run: |
-          curl -fsS -c cookies.txt http://localhost:3001/api/csrf -o csrf.json || true
-          echo "CSRF=$(jq -r '.csrfToken // empty' csrf.json)" >> "$GITHUB_ENV" || true
+          set -e
+          curl -fsS -c cookies.txt "http://localhost:${API_PORT}${CSRF_PATH}" -o csrf.json
+          CSRF=$(jq -r '.csrfToken // empty' csrf.json)
+          if [ -z "$CSRF" ]; then
+            echo "No CSRF token in response ❌"
+            cat csrf.json || true
+            exit 1
+          fi
+          echo "CSRF=$CSRF" >> "$GITHUB_ENV"
 
       - name: Log in as admin
+        shell: bash
         run: |
-          if [ -n "${CSRF:-}" ]; then
-            curl -fsS -b cookies.txt -c cookies.txt \
-              -H "Content-Type: application/json" \
-              -H "X-CSRF-Token: $CSRF" \
-              -X POST http://localhost:3001/api/auth/login \
-              -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD_PLAIN\"}" \
-              -o login.json || true
-            cat login.json || true
-          else
-            echo "::warning::No CSRF token; skipping login"
-          fi
+          set -e
+          CODE=$(curl -sS -b cookies.txt -c cookies.txt \
+            -H "Content-Type: application/json" \
+            -H "X-CSRF-Token: $CSRF" \
+            -o login.json -w "%{http_code}" \
+            -X POST "http://localhost:${API_PORT}/api/auth/login" \
+            -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD_PLAIN\"}")
+          echo "Login HTTP code: $CODE"
+          cat login.json || true
+          test "$CODE" -ge 200 -a "$CODE" -lt 300
 
-      - name: Dashboard summary
+      - name: Dashboard summary 200
+        shell: bash
         run: |
-          curl -fsS -b cookies.txt http://localhost:3001/api/admin/dashboard/summary -o summary.json || true
-          cat summary.json 2>/dev/null | jq . || true
+          set -e
+          CODE=$(curl -sS -b cookies.txt \
+            -o summary.json -w "%{http_code}" \
+            "http://localhost:${API_PORT}/api/admin/dashboard/summary")
+          echo "Dashboard HTTP code: $CODE"
+          cat summary.json | jq . || true
+          test "$CODE" -ge 200 -a "$CODE" -lt 300
 
-      - name: Print API logs (always)
-        if: always()
+      - name: Print API logs on failure
+        if: failure()
         run: |
-          echo "===== API LOGS ====="
+          echo "===== FULL API LOGS ====="
           cat api.log || true
 
       - name: Kill API (always)
         if: always()
         run: |
-          [ -f api.pid ] && kill $(cat api.pid) || true
+          if [ -f api.pid ]; then
+            kill "$(cat api.pid)" || true
+          fi
