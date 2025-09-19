@@ -14,39 +14,38 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: entreproise
+          POSTGRES_DB: entreprise
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
 
     env:
       # DB locale exposée par le service postgres
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/entreproise?schema=public
-      # Secrets du dépôt (déjà ajoutés)
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/entreprise?schema=public
+      # Secrets du dépôt
       SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
-      ADMIN_EMAIL:     ${{ secrets.ADMIN_EMAIL }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
       ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
-      # Mot de passe en clair pour le login de test.
-      # ⚠️ Choisis le même mot de passe que celui utilisé pour générer ADMIN_PASSWORD_HASH.
+      # Mot de passe en clair correspondant au hash ci-dessus
       ADMIN_PASSWORD_PLAIN: ReenweezAdmin2025!
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
 
       - name: Prisma generate
@@ -56,25 +55,27 @@ jobs:
         run: |
           npx prisma migrate deploy || npx prisma db push
 
-      - name: Seed DB
-        run: npx prisma db seed
+      - name: Seed DB (force tsx)
+        run: npx tsx prisma/seed.ts
 
       - name: Start API (background) and wait for /api/health
         shell: bash
         run: |
-          set -e
-          # Démarre l'API (essaie server/index.ts, sinon server/app.ts, sinon script npm)
+          set -euo pipefail
+          # Démarre l’API (ajuste le chemin si besoin)
           if [ -f server/index.ts ]; then
-            npx ts-node server/index.ts > api.log 2>&1 &
+            npx tsx server/index.ts > api.log 2>&1 &
           elif [ -f server/app.ts ]; then
-            npx ts-node server/app.ts > api.log 2>&1 &
+            npx tsx server/app.ts > api.log 2>&1 &
           else
             npm run dev:server > api.log 2>&1 &
           fi
-          # Attente de l'API
+
+          # Attente de l’API
           for i in {1..60}; do
             if curl -fsS http://localhost:3001/api/health >/dev/null; then
-              echo "API up"; break
+              echo "API is up"
+              break
             fi
             sleep 2
           done
@@ -83,9 +84,9 @@ jobs:
       - name: Get CSRF token
         run: |
           curl -fsS -c cookies.txt http://localhost:3001/api/csrf -o csrf.json
-          echo "CSRF=$(jq -r '.csrfToken' csrf.json)" >> $GITHUB_ENV
+          echo "CSRF=$(jq -r '.csrfToken' csrf.json)" >> "$GITHUB_ENV"
 
-      - name: Login as admin
+      - name: Log in as admin
         run: |
           curl -fsS -b cookies.txt -c cookies.txt \
             -H "Content-Type: application/json" \
@@ -98,7 +99,7 @@ jobs:
       - name: Dashboard summary should return 200
         run: |
           curl -fsS -b cookies.txt http://localhost:3001/api/admin/dashboard/summary -o summary.json
-          jq type summary.json
+          cat summary.json | jq .
 
       - name: Print API logs on failure
         if: failure()
