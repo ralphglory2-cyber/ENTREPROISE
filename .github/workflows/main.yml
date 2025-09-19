@@ -1,3 +1,4 @@
+```yaml
 name: CI — Admin API smoke tests
 
 on:
@@ -43,10 +44,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      # jq n'est pas garanti sur tous les runners
+      - name: Ensure jq is installed
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install dependencies (ci with fallback)
+        shell: bash
+        run: |
+          set -e
+          echo "PWD: $(pwd)"
+          ls -la
+          if [ -f package-lock.json ]; then
+            echo "Using npm ci"
+            npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+          else
+            echo "No package-lock.json -> npm install"
+            npm install --no-audit --no-fund
+          fi
 
       - name: Prisma generate
         run: npx prisma generate
@@ -55,6 +71,7 @@ jobs:
         run: |
           npx prisma migrate deploy || npx prisma db push
 
+      # Forcer l'usage de tsx pour éviter l'erreur ts-node/ESM
       - name: Seed DB (force tsx)
         run: npx tsx prisma/seed.ts
 
@@ -106,3 +123,4 @@ jobs:
         run: |
           echo "===== API LOGS ====="
           cat api.log || true
+```
